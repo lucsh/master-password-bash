@@ -106,9 +106,18 @@ r=$(((vowelsLen*symsLen+100/2)/100))
 prepass=${prepass:0:len/3}${syms:r:1}${prepass:len/3:len/3}${syms:r+2:1}${prepass:len/3*2:len/3}
 fi
 if [[ ${use_caps} = true ]]; then
+middle=${prepass:len/3:len/3}
 
-midddle=${prepass:len/3:len/3}
-capped=$(echo "$midddle" | tr '[:lower:]' '[:upper:]')
+if [[ ${middle:1:len/3} =~ ^[0-9]+$ ]]
+then
+    #$4237 => $A44L
+    letters=IDKFAHOLYV
+    posa=${middle:1:1}
+    posb=${middle:(len/3)-1:1}
+    middle=${middle:0:1}${letters:posa:1}${middle:2:(len/3)-3}${letters:posb:1}
+fi
+
+capped=$(echo "$middle" | tr '[:lower:]' '[:upper:]')
 prepass=${prepass:0:len/3}${capped}${prepass:len/3*2:len/3}
 fi
 

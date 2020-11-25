@@ -122,7 +122,7 @@ prepass=${prepass:0:len/3}${capped}${prepass:len/3*2:len/3}
 fi
 
 prepass=${prepass:0:len}
-cancopy=$(command -v pbcopya 2>/dev/null)
+cancopy=$(command -v pbcopy 2>/dev/null)
 if  $cancopy ; then
     echo -n "$prepass" | pbcopy
 fi

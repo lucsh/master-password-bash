@@ -110,7 +110,7 @@ middle=${prepass:len/3:len/3}
 
 if [[ ${middle:1:len/3} =~ ^[0-9]+$ ]]
 then
-    #$4237 => $A44L
+    #$4237 => $A23L
     letters=IDKFAHOLYV
     posa=${middle:1:1}
     posb=${middle:(len/3)-1:1}

@@ -1,136 +1,227 @@
 #!/usr/bin/env bash
+#
+# spg - stateless password generator.
+# Bash port of https://pass.luc.sh (github.com/lucsh/master-password).
+#
+# The output must match the website byte for byte, including its legacy
+# quirks (fractional length slicing, the "undefined" letter lookup, Latin-1
+# hashing). tests/compat.sh checks this against the website's fixtures.
+# Do not "fix" the algorithm here without a versioning decision upstream.
+#
+# Works with the bash 3.2 that ships with macOS: no ${var^^}, no mapfile.
 
-REDACTED='\033[1;107;97m'
-NC='\033[0m'
+set -euo pipefail
 
-header_flag=false
-pass_input=""
-len=15
-use_symbols=true
-use_caps=true
+readonly SYMS='{!#$%&()*+,-./:;<=>?@[{}]^_|~}'
+readonly LETTERS='IDKFAHOLYV'
+readonly REDACTED=$'\033[1;107;97m'
+readonly NC=$'\033[0m'
 
-while test $# -gt 0; do
-  case "$1" in
-    -z|--header)
-      header_flag=true
-      shift
-      ;;
-    -s|--seed)
-  shift
-      if  [[ $1 == "-p" ]] ; then
-        echo "no seed was specified"
-        exit 1
-      fi
-      if test $# -gt 0; then
-        export seed_input=$1
-      else
-        echo "no seed was specified"
-        exit 1
-      fi
-      shift
-      ;;
-    -p|--pass)
-  shift
-      if test $# -gt 0; then
-        export pass_input=$1
-      fi
-      shift
-      ;;
-    -l|--length)
-  shift
-      if test $# -gt 0; then
-        export len=$1
-      fi
-      shift
-      ;;
-   -c|--captitals)
-      use_caps=false
-      shift
-      ;;
-    -e|--symbols)
-      use_symbols=false
-      shift
-      ;;
-    *)
+usage() {
+  cat <<'EOF'
+Usage: spg.sh [options]
 
-      break
-      ;;
+Generates a site password from a seed and your master password.
+Anything not given as an option is prompted for (the master password
+prompt does not echo).
+
+Options:
+  -s, --seed SEED      seed, e.g. admin@service-environment
+  -p, --pass PASS      master password (avoid: visible in shell history and ps)
+  -l, --length N       password length, 1-64 (default 15)
+  -c, --no-caps        do not uppercase the middle section
+  -e, --no-symbols     do not insert symbols
+  -o, --stdout         print the password instead of copying it
+  -z, --header         show the banner
+  -h, --help           show this help
+EOF
+}
+
+die() {
+  printf 'spg: %s\n' "$*" >&2
+  exit 1
+}
+
+# --- JavaScript string semantics -------------------------------------------
+# Indexes are non-negative integers here; JS truncates fractional indexes,
+# which bash integer division already does.
+
+# String.prototype.slice(start, end)
+js_slice() {
+  local s=$1 start=$2 end=$3
+  if (( end > ${#s} )); then end=${#s}; fi
+  if (( end <= start )); then return 0; fi
+  printf '%s' "${s:start:end-start}"
+}
+
+# String.prototype.substring(a, b): clamps to [0, length] and swaps if a > b.
+js_substring() {
+  local s=$1 a=$2 b=$3 t
+  if (( a < 0 )); then a=0; fi
+  if (( b < 0 )); then b=0; fi
+  if (( a > b )); then t=$a; a=$b; b=$t; fi
+  js_slice "$s" "$a" "$b"
+}
+
+# LETTERS[ch]: a digit maps to a letter; anything else is undefined, which a
+# template literal renders as the text "undefined".
+letter_for() {
+  case $1 in
+    [0-9]) printf '%s' "${LETTERS:$1:1}" ;;
+    *) printf 'undefined' ;;
   esac
-done
-shopt -s expand_aliases
-if [[ ${header_flag} = true ]]; then
-echo ""
-echo ""
-echo "    ███████╗██████╗  ██████╗"
-echo "    ██╔════╝██╔══██╗██╔════╝ "
-echo "    ███████╗██████╔╝██║  ███╗"
-echo "    ╚════██║██╔═══╝ ██║   ██║"
-echo "    ███████║██║     ╚██████╔╝"
-echo "    ╚══════╝╚═╝      ╚═════╝"
-echo ""
-echo "  repo:   https://github.com/lucsh/master-password-bash"
-echo "  web:    https://pass.luc.sh"
-echo "  author: https://luc.sh"
-echo ""
-echo ""
-fi
+}
 
-if sha256sum 2>/dev/null ; then
-  echo "using sha256sum"
-else
-  alias sha256sum='shasum --algorithm 256'
-fi
+to_upper() {
+  printf '%s' "$1" | LC_ALL=C tr '[:lower:]' '[:upper:]'
+}
 
-if [[ $seed_input == "" ]]; then
-    echo -n "Seed:"
-    read -r seed_input
-fi
+# --- Hashing ----------------------------------------------------------------
 
-if [[ $pass_input == "" ]]; then
-    echo -n "Password:"
-    read -r -s pass_input
-fi
-
-
-
-prepass=$(echo -n "$seed_input""$pass_input" | sha256sum)
-if [[ ${use_symbols} = true ]]; then
-vowels=( $(echo $prepass | grep -o '[aeiou]') )
-
-syms="{!#$%&()*+,-./:;<=>?@[{}]^_|~}"
-
-symsLen=${#syms}
-vowelsLen=${#vowels[@]}
-
-r=$(((vowelsLen*symsLen+100/2)/100))
-prepass=${prepass:0:len/3}${syms:r:1}${prepass:len/3:len/3}${syms:r+2:1}${prepass:len/3*2:len/3}
-fi
-if [[ ${use_caps} = true ]]; then
-middle=${prepass:len/3:len/3}
-
-if [[ ${middle:1:len/3} =~ ^[0-9]+$ ]]
-then
-    #$4237 => $A23L
-    letters=IDKFAHOLYV
-    posa=${middle:1:1}
-    posb=${middle:(len/3)-1:1}
-    middle=${middle:0:1}${letters:posa:1}${middle:2:(len/3)-3}${letters:posb:1}
-fi
-
-capped=$(echo "$middle" | tr '[:lower:]' '[:upper:]')
-prepass=${prepass:0:len/3}${capped}${prepass:len/3*2:len/3}
-fi
-
-prepass=${prepass:0:len}
-
-cancopy=$(command -v pbcopy 2>/dev/null)
-
-
-if  [[ ${cancopy} ]]; then
-    echo -n "$prepass" | pbcopy
-    echo -e "\nResult copied:"
+sha256_hex() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 -r | awk '{print $1}'
   else
-    echo -e "\nResult: "
-    echo -e "${REDACTED}$prepass${NC}"
-fi
+    die 'no SHA-256 tool found (need sha256sum, shasum or openssl)'
+  fi
+}
 
+# The website hashes the input as one byte per character when every
+# character is <= U+00FF (Latin-1), and as UTF-8 otherwise. Input arrives
+# here as UTF-8, so transcode when it fits in Latin-1.
+hash_input() {
+  local input=$1
+  if printf '%s' "$input" | iconv -f UTF-8 -t ISO-8859-1 >/dev/null 2>&1; then
+    printf '%s' "$input" | iconv -f UTF-8 -t ISO-8859-1 | sha256_hex
+  else
+    printf '%s' "$input" | sha256_hex
+  fi
+}
+
+# --- Generator (mirrors getPass in src/scripts/script.js) -------------------
+
+generate() {
+  local seed=$1 master=$2 len=$3 use_symbols=$4 use_caps=$5
+  local a=$((len / 3)) b=$((len * 2 / 3))
+  local prepass middle vowels index mlen
+
+  prepass=$(hash_input "$seed$master")
+
+  if [[ $use_symbols == true ]]; then
+    vowels=${prepass//[^aeiou]/}
+    # The website throws here ("cannot be generated"); so do we.
+    [[ -n $vowels ]] || die 'this seed cannot be generated by the current algorithm; try another seed'
+    index=$(( (${#vowels} * ${#SYMS} + 50) / 100 )) # Math.round(n * 31 / 100)
+    prepass="$(js_slice "$prepass" 0 "$a")${SYMS:index:1}$(js_slice "$prepass" "$a" "$b")${SYMS:index+2:1}$(js_slice "$prepass" "$b" "$len")"
+  fi
+
+  if [[ $use_caps == true ]]; then
+    middle=$(js_slice "$prepass" "$a" "$b")
+    if [[ $(js_substring "$middle" 1 "$a") =~ ^[0-9]+$ ]]; then
+      # e.g. #$4237 => $A23L
+      mlen=${#middle}
+      middle="${middle:0:1}$(letter_for "${middle:1:1}")$(js_substring "$middle" 1 $((mlen - 2)))$(letter_for "${middle:mlen-1:1}")"
+    fi
+    prepass="$(js_slice "$prepass" 0 "$a")$(to_upper "$middle")$(js_slice "$prepass" "$b" "$len")"
+  fi
+
+  js_slice "$prepass" 0 "$len"
+}
+
+# --- Output -----------------------------------------------------------------
+
+copy_to_clipboard() {
+  if command -v pbcopy >/dev/null 2>&1; then
+    pbcopy
+  elif [[ -n ${WAYLAND_DISPLAY:-} ]] && command -v wl-copy >/dev/null 2>&1; then
+    wl-copy
+  elif [[ -n ${DISPLAY:-} ]] && command -v xclip >/dev/null 2>&1; then
+    xclip -selection clipboard
+  elif [[ -n ${DISPLAY:-} ]] && command -v xsel >/dev/null 2>&1; then
+    xsel --clipboard --input
+  elif command -v clip.exe >/dev/null 2>&1; then
+    clip.exe
+  else
+    return 1
+  fi
+}
+
+banner() {
+  cat >&2 <<'EOF'
+
+
+    ███████╗██████╗  ██████╗
+    ██╔════╝██╔══██╗██╔════╝
+    ███████╗██████╔╝██║  ███╗
+    ╚════██║██╔═══╝ ██║   ██║
+    ███████║██║     ╚██████╔╝
+    ╚══════╝╚═╝      ╚═════╝
+
+  repo:   https://github.com/lucsh/master-password-bash
+  web:    https://pass.luc.sh
+  author: https://luc.sh
+
+
+EOF
+}
+
+main() {
+  local seed='' have_seed=false master='' have_master=false
+  local len=15 use_symbols=true use_caps=true to_stdout=false header=false
+
+  while (( $# > 0 )); do
+    case $1 in
+      -s|--seed)
+        (( $# > 1 )) || die "$1 needs a value"
+        seed=$2; have_seed=true; shift 2 ;;
+      -p|--pass)
+        (( $# > 1 )) || die "$1 needs a value"
+        master=$2; have_master=true; shift 2 ;;
+      -l|--length)
+        (( $# > 1 )) || die "$1 needs a value"
+        len=$2; shift 2 ;;
+      -c|--no-caps|--captitals|--capitals) use_caps=false; shift ;;
+      -e|--no-symbols|--symbols) use_symbols=false; shift ;;
+      -o|--stdout) to_stdout=true; shift ;;
+      -z|--header) header=true; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) usage >&2; die "unknown option: $1" ;;
+    esac
+  done
+
+  [[ $len =~ ^[0-9]+$ ]] && (( 10#$len >= 1 && 10#$len <= 64 )) \
+    || die 'length must be a whole number from 1 to 64'
+  len=$((10#$len))
+
+  if [[ $header == true ]]; then banner; fi
+
+  # IFS= keeps leading/trailing spaces, which change the password.
+  if [[ $have_seed == false ]]; then
+    printf 'Seed: ' >&2
+    IFS= read -r seed || true
+  fi
+  if [[ $have_master == false ]]; then
+    printf 'Password: ' >&2
+    IFS= read -r -s master || true
+    printf '\n' >&2
+  fi
+
+  local password
+  password=$(generate "$seed" "$master" "$len" "$use_symbols" "$use_caps")
+
+  if [[ $to_stdout == true ]]; then
+    printf '%s\n' "$password"
+  elif printf '%s' "$password" | copy_to_clipboard 2>/dev/null; then
+    printf 'Password copied to clipboard.\n' >&2
+  else
+    # No clipboard: print it highlighted (white on white) so it is
+    # selectable but not readable over the shoulder.
+    printf 'Result: %s%s%s\n' "$REDACTED" "$password" "$NC"
+  fi
+}
+
+main "$@"
